@@ -1,194 +1,323 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
 import os
-import random
+import pickle
 
-st.set_page_config(page_title="Will My Flight Be Late?", page_icon="", layout="centered")
+st.set_page_config(page_title = "Smart Hospital Patient Navigator", page_icon = "🏥", layout = "wide")
 
 st.markdown("""
 <style>
-#MainMenu { visibility: hidden; }
-header[data-testid="stHeader"] { display: none; }
-.stDeployButton { display: none; }
-footer { visibility: hidden; }
-.block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; max-width: 700px !important; }
-div[data-testid="stForm"] { border: none; padding: 0; }
+@import url ('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] {font-family:'Inter', sans-serif;}
+#MainMenu {visibility:hidden;}
+header[data-testid="stHeader"]{display:none;'}
+.stDeployButton{display:none;}
+footer{visiblity: hidden;}
+.block-container{padding-top:0 !important;padding-bottom: 2 rem !important; max-width: 1100px !important; }
+div[data-testid="stForm"] {border: none; padding: 0;}
+
 div.stButton > button {
-    background-color: #1A3A5C !important; color: white !important;
-    border: none !important; border-radius: 10px !important;
-    padding: 0.6rem 1.5rem !important; font-size: 15px !important;
-    font-weight: 500 !important; width: 100% !important;
+background: linear-gradient(135deg, #1a56db, #1e429f) !important;
+color: white !important; border: none !important;
+border-radius: 12px !important; padding: 0.75rem 2rem !important;
+font-size: 16px !important; font-weight: 600 !important;
+width: 100% !important; letter-spacing: 0.02em !important;
+box-shadow: 0 4px 14px rgba(26, 86, 219, 0.35) !important;
 }
-div.stButton > button:hover { background-color: #2E86AB !important; }
+div.stButton > button:hover {background: linear-gradient(135deg, #1e429f, #1a56db) !important;}
+
+div[data-test.id="stCheckbox"] label {
+  font-size: 14 px !important; font-weight 500 !important; color: #374151 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-
 @st.cache_resource
 def load_model():
-    model_path = os.path.join(os.path.dirname(__file__), 'model.pkl')
-    with open(model_path, 'rb') as f:
-        return pickle.load(f)
+  with open('hospital_model.pkl', 'rb') as f:
+    return pickle.load(f)
 
-artifact           = load_model()
-model              = artifact['model']
-scaler             = artifact['scaler']
-features           = artifact['features']
-cols_to_scale      = artifact['cols_to_scale']
-origin_delay_rate  = artifact.get('origin_delay_rate', {})
-global_delay_rate  = sum(origin_delay_rate.values()) / len(origin_delay_rate) if origin_delay_rate else 0.107
+bundle = load_model()
+model = bundle['model']
+scaler = bundle['scaler']
+features = bundle['features']
+cols_to_scale = bundle['cols_to_scale']
+dept_map_inv = bundle['dept_map_inv']
+gender_map = bundle['gender_map']
+temp_map = bundle['temp_map']
+hr_map = bundle['hr_map']
+dur_map = bundle['dur_map']
+cc_map = bundle['cc_map']
 
-AIRPORTS = {
-    'ATL':'Atlanta','DFW':'Dallas/Fort Worth','DEN':'Denver',
-    'ORD':"Chicago O'Hare",'LAX':'Los Angeles','JFK':'New York JFK',
-    'LGA':'New York LaGuardia','MCO':'Orlando','LAS':'Las Vegas',
-    'PHX':'Phoenix','CLT':'Charlotte','MIA':'Miami',
-    'SEA':'Seattle','BOS':'Boston','MSP':'Minneapolis',
-    'SFO':'San Francisco','EWR':'Newark','IAH':'Houston',
+DEPT_INFO = {
+    'Respiratory Medicine': {
+        'icon':'🫁','color':'#0284c7','bg':'#e0f2fe','border':'#7dd3fc',
+        'desc':'Specialises in conditions affecting the lungs and airways.',
+        'next':['Visit Level 2, Wing B','Estimated wait: 15–25 min','Please wear a mask']
+    },
+    'Cardiology': {
+        'icon':'❤️','color':'#dc2626','bg':'#fee2e2','border':'#fca5a5',
+        'desc':'Specialises in heart and cardiovascular conditions.',
+        'next':['Visit Level 3, Wing A','Estimated wait: 20–30 min','Bring any previous ECG reports']
+    },
+    'Gastroenterology': {
+        'icon':'🫃','color':'#d97706','bg':'#fef3c7','border':'#fcd34d',
+        'desc':'Specialises in digestive system and abdominal conditions.',
+        'next':['Visit Level 1, Wing C','Estimated wait: 10–20 min','Avoid eating before consultation']
+    },
+    'Neurology': {
+        'icon':'🧠','color':'#7c3aed','bg':'#ede9fe','border':'#c4b5fd',
+        'desc':'Specialises in brain, spine, and nervous system conditions.',
+        'next':['Visit Level 4, Wing A','Estimated wait: 25–35 min','Bring list of current medications']
+    },
+    'General Medicine': {
+        'icon':'🩺','color':'#059669','bg':'#d1fae5','border':'#6ee7b7',
+        'desc':'Handles general health concerns and non-specialist conditions.',
+        'next':['Visit Level 1, Wing A','Estimated wait: 10–15 min','Registration desk is open 24/7']
+    },
+    'Dermatology': {
+        'icon':'🔬','color':'#b45309','bg':'#fef9c3','border':'#fde68a',
+        'desc':'Specialises in skin, hair, and nail conditions.',
+        'next':['Visit Level 2, Wing D','Estimated wait: 15–20 min','Bring photos of affected area if possible']
+    },
 }
-MONTHS       = {1:'January',2:'February',3:'March',4:'April',5:'May',6:'June',
-                7:'July',8:'August',9:'September',10:'October',11:'November',12:'December'}
-MONTHS_SHORT = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
-                7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
-DAYS         = {1:'Monday',2:'Tuesday',3:'Wednesday',4:'Thursday',5:'Friday',6:'Saturday',7:'Sunday'}
 
-
-def build_factors(month, dow, dep_hour, distance, origin, origin_delay_rate, global_delay_rate):
-    factors = []
-    is_peak    = month in [1, 7, 11, 12]
-    is_weekend = dow >= 6
-    dep_period = 0 if dep_hour < 12 else 1 if dep_hour < 17 else 2 if dep_hour < 21 else 3
-    if is_peak:
-        factors.append(('risk', 'January — high winter storm risk' if month == 1 else 'Peak travel month — higher delay probability'))
-    else:
-        factors.append(('safe', 'Off-peak month — lower weather risk'))
-
-    if dep_period == 2:
-        factors.append(('risk', 'Evening departure — delays accumulate through the day'))
-    elif dep_period == 3:
-        factors.append(('risk', 'Late night departure — residual delay risk'))
-    elif dep_period == 0:
-        factors.append(('safe', 'Morning departure — fewest accumulated delays'))
-    else:
-        factors.append(('neutral', 'Afternoon departure — moderate risk'))
-
-    factors.append(('risk', 'Weekend — higher passenger volume') if is_weekend
-                   else ('safe', 'Weekday — typically lighter congestion'))
-
-    if distance > 2000:
-        factors.append(('neutral', f'Long-haul ({distance:,} mi) — more weather exposure'))
-    elif distance < 500:
-        factors.append(('safe', f'Short-haul ({distance:,} mi) — less weather exposure'))
-    else:
-        factors.append(('neutral', f'Medium-distance ({distance:,} mi)'))
-
-    rate = origin_delay_rate.get(origin, global_delay_rate)
-    if rate > global_delay_rate * 1.2:
-        factors.append(('risk', f'{origin} — {rate*100:.1f}% historical delay rate (above average)'))
-    elif rate < global_delay_rate * 0.8:
-        factors.append(('safe', f'{origin} — {rate*100:.1f}% historical delay rate (below average)'))
-    else:
-        factors.append(('neutral', f'{origin} — {rate*100:.1f}% historical delay rate (near average)'))
-
-    return factors
-
-
-# Header
+# -- Hero Header ---------------------------------
 st.markdown("""
-<p style="font-size:12px;font-weight:500;color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">
-Future Classroom · Machine Learning</p>
-<p style="font-size:26px;font-weight:600;color:#111827;margin-bottom:0;">Will my flight be late?</p>
-<span style="background:#eff6ff;color:#1e40af;font-size:11px;padding:4px 10px;border-radius:6px;font-weight:500;">
-Powered by Decision Tree · Trained on 1M+ flights · 81% accuracy · origin-aware</span>
-<br><br>
-""", unsafe_allow_html=True)
-
-# Create Form
-with st.form("flight_form"):
- coll, co12=st.columns(2)
- with coll:
-  origin = st.selectbox('Origin airport',list(AIRPORTS.keys))
-  format_func=lambda x:f"{x}-{AIRPOTS[x]}"
-  index=list(AIRPOTS.keys()).index('JFK')
-  month=st.selectbox('Month',list(MONTHS.keys()),
-  format_func=lambda x: MONTHS[x], index=0),
-  dep_hour = st.selectbox('Departure time',list(range(5,23)),
-  format_func=lambda x:f"{x:02d}:00 {'AM'if x <12 else 'PM'}",
-  index=4)
-
-# Create Result
-
-    html = f"""
-
-<div style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;margin-top:1rem;">
-
-  <!-- Header -->
-  <div style="background:#1A3A5C;padding:16px 24px;">
-    <div style="font-size:10px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;">Boarding pass</div>
-    <div style="font-size:16px;font-weight:600;color:#ffffff;letter-spacing:0.03em;">Future Airlines</div>
-  </div>
-
-  <!-- Route -->
-  <div style="padding:24px 24px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px dashed #e5e7eb;">
-    <div>
-      <div style="font-size:44px;font-weight:700;color:#111827;line-height:1;font-family:monospace;letter-spacing:0.02em;">{origin}</div>
-      <div style="font-size:12px;color:#6b7280;margin-top:5px;">{AIRPORTS.get(origin,origin)}</div>
+<div style="background:linear-gradient(135deg,#1e3a8a 0%,#1a56db 60%,#0ea5e9 100%);
+            padding:3rem 2rem 2.5rem;margin:-1rem -1rem 2rem;text-align:center;">
+    <div style="font-size:14px;font-weight:500;color:rgba(255,255,255,0.7);
+                text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px;">
+        🏥 Future Classroom · Machine Learning
     </div>
-    <div style="font-size:13px;color:#d1d5db;letter-spacing:0.15em;">— — —</div>
-    <div style="text-align:right;">
-      <div style="font-size:16px;font-weight:500;color:#9ca3af;line-height:1;font-family:monospace;letter-spacing:0.04em;">DESTINATION</div>
-      <div style="font-size:12px;color:#9ca3af;margin-top:6px;">Not in model features</div>
+    <div style="font-size:36px;font-weight:700;color:#ffffff;margin-bottom:12px;
+                letter-spacing:-0.02em;">
+        Smart Hospital Patient Navigator
     </div>
-  </div>
-
-  <!-- Details -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);padding:14px 24px;gap:8px;border-bottom:1px dashed #e5e7eb;">
-    <div>
-      <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;">Month</div>
-      <div style="font-size:15px;font-weight:600;color:#111827;margin-top:4px;font-family:monospace;">{MONTHS_SHORT[month]}</div>
+    <div style="font-size:18px;color:rgba(255,255,255,0.85);font-weight:400;">
+        Find the Right Department for Your Symptoms
     </div>
-    <div>
-      <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;">Departs</div>
-      <div style="font-size:15px;font-weight:600;color:#111827;margin-top:4px;font-family:monospace;">{dep_hour:02d}:00</div>
-    </div>
-    <div>
-      <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;">Distance</div>
-      <div style="font-size:15px;font-weight:600;color:#111827;margin-top:4px;font-family:monospace;">{distance:,} mi</div>
-    </div>
-    <div>
-      <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;">Day</div>
-      <div style="font-size:15px;font-weight:600;color:#111827;margin-top:4px;font-family:monospace;">{DAYS[dow][:3]}</div>
-    </div>
-  </div>
-
-  <!-- Prediction -->
-  <div style="padding:20px 24px;display:flex;justify-content:space-between;align-items:center;background:{verdict_bg};">
-    <div>
-      <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:6px;">ML Prediction</div>
-      <div style="font-size:28px;font-weight:700;color:{verdict_color};">{verdict_txt}</div>
-    </div>
-    <div style="text-align:right;">
-      <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:7px;">Confidence</div>
-      <div style="background:rgba(0,0,0,0.08);border-radius:4px;height:6px;width:130px;overflow:hidden;margin-left:auto;">
-        <div style="background:{bar_color};height:100%;border-radius:4px;width:{confidence}%;"></div>
-      </div>
-      <div style="font-size:15px;font-weight:700;color:{verdict_color};margin-top:6px;">{confidence}%</div>
-    </div>
-  </div>
-
-  <!-- Risk Factors -->
-  <div style="padding:16px 24px 20px;border-top:1px solid #f3f4f6;">
-    <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:12px;">Risk factors</div>
-    {factors_html}
-  </div>
-
-  <!-- Footer note -->
-  <div style="border-top:1px dashed #e5e7eb;padding:12px 24px;">
-    <div style="font-size:11px;color:#9ca3af;">Decision Tree · scikit-learn · 1,022,824 flights · 89% test accuracy</div>
-  </div>
-
 </div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+""",unsafe_allow_html=True)
+#--Form ------------------------------------------
+with st.form("triage_form"):
+  
+   # Section 1 — Symptoms
+    st.markdown("""
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:14px;
+                padding:20px 24px;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+            <span style="background:#0284c7;color:white;border-radius:8px;
+                         padding:4px 10px;font-size:12px;font-weight:600;">1</span>
+            <span style="font-size:16px;font-weight:600;color:#0c4a6e;">What are your main symptoms?</span>
+            <span style="font-size:13px;color:#6b7280;font-style:italic;">select all that apply</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        fever            = st.checkbox("🌡️  Fever")
+        cough            = st.checkbox("🤧  Cough")
+        headache         = st.checkbox("🤕  Headache")
+    with c2:
+        chest_pain       = st.checkbox("💔  Chest Pain")
+        stomach_pain     = st.checkbox("🤢  Stomach Pain")
+        shortness_breath = st.checkbox("😮‍💨  Shortness of Breath")
+    with c3:
+        nausea_vomiting  = st.checkbox("🤮  Nausea / Vomiting")
+        dizziness        = st.checkbox("😵  Dizziness")
+        skin_rash = st.checkbox("🔴  Skin Rash")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Section 2 — Duration & Complaint
+    st.markdown("""
+    <div style="background:#fdf4ff;border:1px solid #e9d5ff;border-radius:14px;
+                padding:20px 24px;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span style="background:#7c3aed;color:white;border-radius:8px;
+                         padding:4px 10px;font-size:12px;font-weight:600;">2</span>
+            <span style="font-size:16px;font-weight:600;color:#3b0764;">How long have you had these symptoms?</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_cc, col_dur = st.columns(2)
+    with col_cc:
+        chief_complaint = st.selectbox("Chief complaint", options=list(cc_map.keys()))
+    with col_dur:
+        duration = st.selectbox("Duration", options=list(dur_map.keys()), index=1)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+  
+    # Section 3 — Severity
+    st.markdown("""
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;
+                padding:20px 24px;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span style="background:#ea580c;color:white;border-radius:8px;
+                         padding:4px 10px;font-size:12px;font-weight:600;">3</span>
+            <span style="font-size:16px;font-weight:600;color:#7c2d12;">How would you rate the severity?</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_temp, col_hr = st.columns(2)
+    with col_temp:
+        temperature_level = st.selectbox("Temperature", options=list(temp_map.keys()), index=1)
+    with col_hr:
+        heart_rate_level  = st.selectbox("Heart rate", options=list(hr_map.keys()), index=1)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Section 4 — Medical History
+    st.markdown("""
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;
+                padding:20px 24px;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+            <span style="background:#059669;color:white;border-radius:8px;
+                         padding:4px 10px;font-size:12px;font-weight:600;">4</span>
+            <span style="font-size:16px;font-weight:600;color:#064e3b;">Do you have any of the following?</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    ch1, ch2, ch3, _ = st.columns(4)
+    with ch1: hypertension  = st.checkbox("🩺 High Blood Pressure")
+    with ch2: heart_disease = st.checkbox("❤️ Heart Disease")
+    with ch3: asthma        = st.checkbox("💨 Asthma")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Section 5 — Patient Info
+    st.markdown("""
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;
+                padding:20px 24px;margin-bottom:24px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span style="background:#475569;color:white;border-radius:8px;
+                         padding:4px 10px;font-size:12px;font-weight:600;">5</span>
+            <span style="font-size:16px;font-weight:600;color:#1e293b;">Patient Information</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_age, col_gen = st.columns(2)
+    with col_age:
+        age    = st.number_input("Age", min_value=1, max_value=120, value=35)
+    with col_gen:
+        gender = st.selectbox("Gender", options=['Female', 'Male'])
+
+    submitted = st.form_submit_button("Get AI Recommendation →")
+
+# -- Result ----------------------------
+if submitted:
+    patient = pd.DataFrame([{
+        'age'              : age,
+        'gender'           : gender_map.get(gender, 0),
+        'fever'            : int(fever),
+        'cough'            : int(cough),
+        'headache'         : int(headache),
+        'chest_pain'       : int(chest_pain),
+        'stomach_pain'     : int(stomach_pain),
+        'shortness_breath' : int(shortness_breath),
+        'nausea_vomiting'  : int(nausea_vomiting),
+        'dizziness'        : int(dizziness),
+        'skin_rash'        : int(skin_rash),
+        'temperature_level': temp_map.get(temperature_level, 1),
+        'heart_rate_level' : hr_map.get(heart_rate_level, 1),
+        'duration'         : dur_map.get(duration, 1),
+        'asthma'           : int(asthma),
+        'hypertension'     : int(hypertension),
+        'heart_disease'    : int(heart_disease),
+        'chief_complaint'  : cc_map.get(chief_complaint, 9)
+    }])
+
+    patient_scaled = patient.copy()
+    patient_scaled[cols_to_scale] = scaler.transform(patient[cols_to_scale])
+
+    pred       = model.predict(patient_scaled[features])[0]
+    proba      = model.predict_proba(patient_scaled[features])[0]
+    dept_name  = dept_map_inv[pred]
+    confidence = proba[pred] * 100
+    info       = DEPT_INFO[dept_name]
+
+    st.markdown("---")
+    st.markdown("""
+    <div style="font-size:22px;font-weight:700;color:#111827;margin-bottom:4px;">AI Recommendation</div>
+    <div style="font-size:14px;color:#6b7280;margin-bottom:1.5rem;">Based on the information you provided</div>
+    """, unsafe_allow_html=True)
+
+    res_col, prob_col = st.columns([3, 2])
+
+    with res_col:
+        steps_html = ''.join(
+            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+            f'<span style="color:{info["color"]};font-size:14px;">📍</span>'
+            f'<span style="font-size:14px;color:#374151;">{step}</span></div>'
+            for step in info['next']
+        )
+        st.markdown(f"""
+        <div style="background:{info['bg']};border:1.5px solid {info['border']};
+                    border-radius:16px;padding:28px 32px;">
+            <div style="font-size:44px;margin-bottom:12px;">{info['icon']}</div>
+            <div style="font-size:26px;font-weight:700;color:{info['color']};margin-bottom:8px;">{dept_name}</div>
+            <div style="font-size:14px;color:#374151;margin-bottom:20px;">
+                Our AI suggests you visit the <strong>{dept_name}</strong> Department.
+            </div>
+            <div style="font-size:11px;font-weight:600;color:{info['color']};text-transform:uppercase;
+                        letter-spacing:0.08em;margin-bottom:8px;">Why?</div>
+            <div style="font-size:14px;color:#4b5563;margin-bottom:20px;">{info['desc']} Your reported symptoms and vitals match patients typically directed to this department.</div>
+            <div style="font-size:11px;font-weight:600;color:{info['color']};text-transform:uppercase;
+                        letter-spacing:0.08em;margin-bottom:10px;">What to do next?</div>
+            {steps_html}
+            <div style="margin-top:20px;padding:12px 16px;background:rgba(0,0,0,0.05);
+                        border-radius:10px;font-size:12px;color:#6b7280;line-height:1.5;">
+                ⚠️ This is an AI suggestion, not a medical diagnosis. Please consult a doctor for further evaluation.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with prob_col:
+        st.markdown(f"""
+        <div style="background:white;border:1px solid #e5e7eb;border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:600;color:#111827;margin-bottom:16px;">
+                Confidence by department
+            </div>
+        """, unsafe_allow_html=True)
+
+        sorted_depts = sorted(dept_map_inv.items(), key=lambda x: proba[x[0]], reverse=True)
+        bars_html = ""
+        for idx, dname in sorted_depts:
+            pct    = proba[idx] * 100
+            dinfo  = DEPT_INFO[dname]
+            is_top = dname == dept_name
+            bars_html += f"""
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                    <span style="font-size:13px;font-weight:{'700' if is_top else '400'};
+                                 color:{'#111827' if is_top else '#6b7280'};">
+                        {dinfo['icon']} {dname}
+                    </span>
+                    <span style="font-size:13px;font-weight:{'700' if is_top else '400'};
+                                 color:{dinfo['color'] if is_top else '#9ca3af'};">
+                        {pct:.1f}%
+                    </span>
+                </div>
+                <div style="background:#f3f4f6;border-radius:6px;height:8px;overflow:hidden;">
+                    <div style="background:{'linear-gradient(90deg,'+dinfo['color']+','+dinfo['border']+')' if is_top else '#e5e7eb'};
+                                height:100%;border-radius:6px;width:{pct}%;
+                                transition:width 0.5s ease;"></div>
+                </div>
+            </div>"""
+
+        st.markdown(bars_html + """
+            <div style="margin-top:20px;background:#eff6ff;border:1px solid #bfdbfe;
+                        border-radius:10px;padding:12px 14px;font-size:12px;color:#1e40af;">
+                <strong>Model:</strong> KNN (k=7) · 102,000 patients · 99.5% accuracy<br>
+                <strong>Powered by:</strong> Future Classroom ML
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
